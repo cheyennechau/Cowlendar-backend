@@ -22,7 +22,7 @@ Events today: {len(events)} items.
     system = "You return only valid minified JSON."
     user = prompt + f"\nComputed percent_done={percent}.\nHistory={history_percent[-7:]}"
     msg = client.messages.create(
-        model="claude-3-5-sonnet-20241022",
+        model="claude-sonnet-4-5",
         max_tokens=200,
         system=system,
         messages=[{"role": "user", "content": user}],
