@@ -1,0 +1,36 @@
+# === Python ===
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+
+# === Environments ===
+.env
+.venv/
+venv/
+env/
+ENV/
+
+# === Editors ===
+.vscode/
+.idea/
+
+# === OS files ===
+.DS_Store
+Thumbs.db
+
+# === Logs & Temp ===
+*.log
+logs/
+tmp/
+.cache/
+
+# === Builds / Artifacts ===
+dist/
+build/
+*.egg-info/
+
+# === OAuth Tokens ===
+token.json
+credentials.json
