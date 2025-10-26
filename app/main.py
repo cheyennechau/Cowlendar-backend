@@ -8,7 +8,6 @@ from .brain_mcp import decide_mood_with_mcp
 from datetime import date
 
 from .model import User, DaySummary, EventCompletion
-from .scheduler import start_scheduler
 from .settings import settings, engine
 from .calendar_client import (
     who_am_i, 
@@ -36,7 +35,6 @@ app.add_middleware(
 @app.on_event("startup")
 def on_start():
     SQLModel.metadata.create_all(engine)
-    start_scheduler()
 
 # routes
 @app.get("/auth/whoami")
