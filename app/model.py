@@ -21,6 +21,14 @@ class DaySummary(SQLModel, table=True):
     completed_events: int = 0
     percent_done: int = 0
     mood: str = "low"
-    message: str = "Let’s start the day 🐮"
+    message: str = "Let's start the day 🐮"
     milk_points: int = 0
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class EventCompletion(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int
+    event_id: str  # Google Calendar event ID
+    day: date
+    completed: bool
+    marked_at: datetime = Field(default_factory=datetime.utcnow)

@@ -7,10 +7,15 @@ from google_auth_oauthlib.flow import Flow
 from .brain_mcp import decide_mood_with_mcp
 from datetime import date
 
-from .model import User, DaySummary
+from .model import User, DaySummary, EventCompletion
 from .scheduler import start_scheduler
 from .settings import settings, engine
-from .calendar_client import who_am_i, percent_done_completed_only
+from .calendar_client import (
+    who_am_i, 
+    percent_done_completed_only,
+    get_past_events_today,
+    percent_done_from_user_input
+)
 from .notion_client import (
     list_databases as notion_list_databases,
     query_database as notion_query_database,
@@ -211,6 +216,67 @@ def api_notion_get_page(page_id: str):
 def api_notion_append(body: NotionAppendBody):
     return notion_append_blocks(body.block_id, body.children)
 
+@app.get("/events/today/past")
+def get_past_events():
+    """Get all events from today that have already ended (for user to mark complete)"""
+    with Session(engine) as s:
+        user = s.exec(select(User)).first()
+        if not user or not user.google_tokens:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        past_events = get_past_events_today(user.google_tokens)
+        
+        # Check which ones user has already marked
+        today = date.today()
+        for event in past_events:
+            completion = s.exec(
+                select(EventCompletion).where(
+                    EventCompletion.user_id == user.id,
+                    EventCompletion.event_id == event["id"],
+                    EventCompletion.day == today
+                )
+            ).first()
+            event["completed"] = completion.completed if completion else None
+        
+        return {"events": past_events}
+
+class EventCompleteBody(BaseModel):
+    event_id: str
+    completed: bool
+
+@app.post("/events/complete")
+def mark_event_complete(body: EventCompleteBody):
+    """Mark an event as completed or not completed"""
+    with Session(engine) as s:
+        user = s.exec(select(User)).first()
+        if not user:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        today = date.today()
+        
+        # Check if already exists
+        existing = s.exec(
+            select(EventCompletion).where(
+                EventCompletion.user_id == user.id,
+                EventCompletion.event_id == body.event_id,
+                EventCompletion.day == today
+            )
+        ).first()
+        
+        if existing:
+            existing.completed = body.completed
+        else:
+            completion = EventCompletion(
+                user_id=user.id,
+                event_id=body.event_id,
+                day=today,
+                completed=body.completed
+            )
+            s.add(completion)
+        
+        s.commit()
+        return {"success": True}
+
 @app.post("/mood/refresh/mcp")
 async def refresh_mood_mcp():
     with Session(engine) as s:
@@ -225,8 +291,8 @@ async def refresh_mood_mcp():
         from .calendar_client import get_today_events
         debug_events = get_today_events(user.google_tokens)
         
-        # deterministic % done from finished events only
-        pct_today = percent_done_completed_only(user.google_tokens)
+        # Calculate % done from user's manual completions
+        pct_today = percent_done_from_user_input(user.id, user.google_tokens, s)
 
         # 2) Recent history (optional context for mood)
         rows = s.exec(
