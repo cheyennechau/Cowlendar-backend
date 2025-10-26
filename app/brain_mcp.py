@@ -239,7 +239,7 @@ Return ONLY valid JSON: {{"percent_done": <int>, "mood": "<string>", "message": 
     max_turns = 10  # Safety limit
     for turn in range(max_turns):
         response = client.messages.create(
-            model="claude-sonnet-4-5",
+            model="claude-sonnet-4-5-20250929",
             max_tokens=4096,
             messages=messages,
             tools=TOOLS
@@ -312,39 +312,42 @@ async def summarize_slack_with_mcp(api_key: str, hours: int = 24, max_channels: 
     """
     client = Anthropic(api_key=api_key)
 
+    prompt_lines = [
+        "You are the Cow Assistant.",
+        "",
+        "Goal: Read recent Slack conversations and produce concise summaries and actionable suggestions.",
+        "",
+        "Instructions:",
+        "- Use slack_list_conversations to discover channels/DMs the user can access.",
+        f"- Select up to {max_channels} conversations that look most relevant (active recently, work-related names).",
+        f"- For each, use slack_fetch_messages to fetch up to {messages_per_channel} recent messages (default recency is OK). Prefer last {hours} hours if possible.",
+        "",
+        "Output only valid JSON with this schema:",
+        "{",
+        '  "channels": [',
+        "    {",
+        '      "id": "string",',
+        '      "name": "string",',
+        '      "summary": "short summary of recent discussion",',
+        '      "key_points": ["point1", "point2"],',
+        '      "action_items": ["action1", "action2"]',
+        "    }",
+        "  ],",
+        '  "overall_insights": ["insight1", "insight2"],',
+        '  "suggestions": ["next-step suggestion 1", "suggestion 2"]',
+        "}",
+    ]
+    prompt = "\n".join(prompt_lines)
+
     messages = [{
         "role": "user",
-        "content": f"""
-You are the Cow Assistant.
-
-Goal: Read recent Slack conversations and produce concise summaries and actionable suggestions.
-
-Instructions:
-- Use slack_list_conversations to discover channels/DMs the user can access.
-- Select up to {max_channels} conversations that look most relevant (active recently, work-related names).
-- For each, use slack_fetch_messages to fetch up to {messages_per_channel} recent messages (default recency is OK). Prefer last {hours} hours if possible.
-
-Output only valid JSON with this schema:
-{
-  "channels": [
-    {
-      "id": "string",
-      "name": "string",
-      "summary": "short summary of recent discussion",
-      "key_points": ["point1", "point2"],
-      "action_items": ["action1", "action2"]
-    }
-  ],
-  "overall_insights": ["insight1", "insight2"],
-  "suggestions": ["next-step suggestion 1", "suggestion 2"]
-}
-"""
+        "content": prompt,
     }]
 
     max_turns = 10
     for _ in range(max_turns):
         response = client.messages.create(
-            model="claude-sonnet-4-5",
+            model="claude-sonnet-4-5-20250929",
             max_tokens=4096,
             messages=messages,
             tools=TOOLS

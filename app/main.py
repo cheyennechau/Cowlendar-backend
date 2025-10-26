@@ -13,6 +13,7 @@ from .brain_mcp import (
     slack_fetch_messages as mcp_slack_fetch_messages,
 )
 from datetime import date
+from anthropic import Anthropic
 
 from .model import User, DaySummary, EventCompletion
 from .settings import settings, engine
@@ -375,6 +376,18 @@ async def api_slack_summarize(body: SlackSummarizeBody):
         max_channels=body.max_channels,
         messages_per_channel=body.messages_per_channel,
     )
+
+@app.get("/anthropic/models")
+def api_anthropic_models():
+    if not settings.ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not configured")
+    client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+    try:
+        models = client.models.list()
+        # Return the model IDs for clarity
+        return {"models": [m.id for m in models]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list models: {e}")
 
 @app.post("/mood/refresh/mcp")
 async def refresh_mood_mcp():
