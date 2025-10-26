@@ -12,6 +12,10 @@ class User(SQLModel, table=True):
         default=None,
         sa_column=Column(JSON)   # <-- this is the key line
     )
+    slack_tokens: Optional[dict] = Field(
+        default=None,
+        sa_column=Column(JSON)
+    )
 
 class DaySummary(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)

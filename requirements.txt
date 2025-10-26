@@ -11,3 +11,4 @@ notion-client
 python-dateutil
 mcp
 requests
+slack_sdk

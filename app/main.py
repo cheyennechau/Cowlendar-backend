@@ -4,7 +4,14 @@ from sqlmodel import SQLModel, Session, select
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
 from google_auth_oauthlib.flow import Flow
-from .brain_mcp import decide_mood_with_mcp
+import requests, secrets
+from urllib.parse import urlencode
+from .brain_mcp import (
+    decide_mood_with_mcp,
+    summarize_slack_with_mcp,
+    slack_list_conversations as mcp_slack_list_conversations,
+    slack_fetch_messages as mcp_slack_fetch_messages,
+)
 from datetime import date
 
 from .model import User, DaySummary, EventCompletion
@@ -39,6 +46,11 @@ app.add_middleware(
 @app.on_event("startup")
 def on_start():
     SQLModel.metadata.create_all(engine)
+    with engine.begin() as conn:
+        cols = conn.exec_driver_sql("PRAGMA table_info('user')").fetchall()
+        names = [c[1] for c in cols]
+        if 'slack_tokens' not in names:
+            conn.exec_driver_sql("ALTER TABLE user ADD COLUMN slack_tokens TEXT")
 
 # routes
 @app.get("/auth/whoami")
@@ -122,7 +134,7 @@ def status():
             "today": {
                 "percent_done": today.percent_done if today else 0,
                 "mood": today.mood if today else "low",
-                "message": today.message if today else "Let’s start the day 🐮",
+                "message": today.message if today else "Let’s start the day ",
                 "milk_points": today.milk_points if today else 0,
             },
         }
@@ -137,6 +149,16 @@ CLIENT_CONFIG = {
     }
 }
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
+SLACK_USER_SCOPES = [
+    "channels:read",
+    "groups:read",
+    "im:read",
+    "mpim:read",
+    "channels:history",
+    "groups:history",
+    "im:history",
+    "mpim:history",
+]
 
 @app.get("/auth/google/start")
 def google_start():
@@ -185,6 +207,52 @@ def google_callback(request: Request, code: str, state: str):
 
     return "Google connected. You can close this tab."
 
+@app.get("/auth/slack/start")
+def slack_start():
+    params = {
+        "client_id": settings.SLACK_CLIENT_ID,
+        "redirect_uri": settings.SLACK_REDIRECT_URI,
+        "user_scope": ",".join(SLACK_USER_SCOPES),
+    }
+    state = secrets.token_urlsafe(16)
+    app.state.slack_oauth_state = state
+    params["state"] = state
+    auth_url = f"https://slack.com/oauth/v2/authorize?{urlencode(params)}"
+    return {"auth_url": auth_url}
+
+@app.get("/auth/slack/callback")
+def slack_callback(request: Request, code: str, state: str):
+    if state != getattr(app.state, "slack_oauth_state", None):
+        raise HTTPException(status_code=400, detail="State mismatch")
+    data = {
+        "client_id": settings.SLACK_CLIENT_ID,
+        "client_secret": settings.SLACK_CLIENT_SECRET,
+        "code": code,
+        "redirect_uri": settings.SLACK_REDIRECT_URI,
+    }
+    resp = requests.post("https://slack.com/api/oauth.v2.access", data=data)
+    body = resp.json()
+    if not body.get("ok"):
+        raise HTTPException(status_code=400, detail=f"Slack OAuth failed: {body.get('error', 'unknown')}")
+    authed_user = body.get("authed_user", {})
+    access_token = authed_user.get("access_token")
+    if not access_token:
+        raise HTTPException(status_code=400, detail="No user access token returned by Slack")
+    tokens = {
+        "access_token": access_token,
+        "user_id": authed_user.get("id"),
+        "scope": authed_user.get("scope"),
+        "team": body.get("team"),
+    }
+    with Session(engine) as s:
+        user = s.exec(select(User)).first()
+        if not user:
+            user = User(email="me@example.com")
+        user.slack_tokens = tokens
+        s.add(user)
+        s.commit()
+    return "Slack connected. You can close this tab."
+
 class NotionQueryBody(BaseModel):
     database_id: str
     filter: Optional[Dict[str, Any]] = None
@@ -195,6 +263,11 @@ class NotionQueryBody(BaseModel):
 class NotionAppendBody(BaseModel):
     block_id: str
     children: List[Dict[str, Any]]
+
+class SlackSummarizeBody(BaseModel):
+    hours: int = 24
+    max_channels: int = 5
+    messages_per_channel: int = 100
 
 @app.get("/notion/databases")
 def api_notion_databases(query: Optional[str] = None, page_size: int = 10):
@@ -278,6 +351,30 @@ def mark_event_complete(body: EventCompleteBody):
         
         s.commit()
         return {"success": True}
+
+@app.get("/slack/conversations")
+async def api_slack_conversations(types: Optional[str] = "public_channel,private_channel,im,mpim", limit: int = 20, cursor: Optional[str] = None):
+    """List Slack conversations accessible by the authenticated user"""
+    return await mcp_slack_list_conversations(types, limit, cursor)
+
+@app.get("/slack/messages")
+async def api_slack_messages(channel_id: str, oldest_ts: Optional[str] = None, latest_ts: Optional[str] = None, limit: int = 100, cursor: Optional[str] = None):
+    """Fetch recent messages for a Slack conversation"""
+    if not channel_id:
+        raise HTTPException(status_code=400, detail="channel_id is required")
+    return await mcp_slack_fetch_messages(channel_id, oldest_ts, latest_ts, limit, cursor)
+
+@app.post("/slack/summarize")
+async def api_slack_summarize(body: SlackSummarizeBody):
+    """Use Claude to summarize recent Slack activity and provide insights."""
+    if not settings.ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not configured")
+    return await summarize_slack_with_mcp(
+        settings.ANTHROPIC_API_KEY,
+        hours=body.hours,
+        max_channels=body.max_channels,
+        messages_per_channel=body.messages_per_channel,
+    )
 
 @app.post("/mood/refresh/mcp")
 async def refresh_mood_mcp():

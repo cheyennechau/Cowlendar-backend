@@ -11,6 +11,9 @@ class Settings:
     GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
     GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
     GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8000/auth/google/callback")
+    SLACK_CLIENT_ID = os.getenv("SLACK_CLIENT_ID", "")
+    SLACK_CLIENT_SECRET = os.getenv("SLACK_CLIENT_SECRET", "")
+    SLACK_REDIRECT_URI = os.getenv("SLACK_REDIRECT_URI", "http://localhost:8000/auth/slack/callback")
 
 settings = Settings()
 engine = create_engine(f"sqlite:///{settings.DB_PATH}")
