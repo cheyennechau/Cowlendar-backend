@@ -10,7 +10,9 @@ def build_calendar(tokens: dict):
     return build("calendar", "v3", credentials=creds)
 
 def today_window():
-    start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    # Use timezone-aware datetime to match local calendar view
+    now = datetime.now().astimezone()
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     end = start + timedelta(days=1, seconds=-1)
     return start, end
 
@@ -21,8 +23,8 @@ def get_today_events(tokens: dict):
         calendarId="primary",
         singleEvents=True,
         orderBy="startTime",
-        timeMin=start.isoformat() + "Z",
-        timeMax=end.isoformat() + "Z",
+        timeMin=start.isoformat(),  # Already has timezone, don't add 'Z'
+        timeMax=end.isoformat(),    # Already has timezone, don't add 'Z'
     ).execute()
     items = res.get("items", [])
     events = []

@@ -43,6 +43,60 @@ def auth_whoami():
         email = who_am_i(user.google_tokens)
         return {"authed": True, "email": email}
 
+@app.get("/debug/calendar")
+def debug_calendar():
+    """Debug endpoint - shows raw calendar data like test_calendar.py"""
+    from google.oauth2.credentials import Credentials
+    from googleapiclient.discovery import build
+    from datetime import datetime, timedelta
+    
+    with Session(engine) as s:
+        user = s.exec(select(User)).first()
+        if not user or not user.google_tokens:
+            return {"error": "No authenticated user"}
+        
+        # Build calendar
+        creds = Credentials.from_authorized_user_info(
+            user.google_tokens,
+            ["https://www.googleapis.com/auth/calendar.readonly"]
+        )
+        cal = build("calendar", "v3", credentials=creds)
+        
+        # Get account email
+        calendar_info = cal.calendarList().get(calendarId='primary').execute()
+        account_email = calendar_info.get('id', 'Unknown')
+        
+        # Get events for today (timezone-aware)
+        now = datetime.now().astimezone()
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+        
+        events_result = cal.events().list(
+            calendarId='primary',
+            timeMin=start.isoformat(),
+            timeMax=end.isoformat(),
+            singleEvents=True,
+            orderBy='startTime'
+        ).execute()
+        
+        events = events_result.get('items', [])
+        
+        # Format events
+        formatted_events = []
+        for event in events:
+            start_time = event['start'].get('dateTime', event['start'].get('date'))
+            formatted_events.append({
+                'title': event.get('summary', 'No title'),
+                'start': start_time,
+                'type': 'Timed' if 'dateTime' in event['start'] else 'All-day'
+            })
+        
+        return {
+            "account_email": account_email,
+            "events": formatted_events,
+            "count": len(formatted_events)
+        }
+
 @app.get("/status")
 def status():
     from datetime import date
@@ -164,6 +218,13 @@ async def refresh_mood_mcp():
         if not user:
             raise HTTPException(status_code=401, detail="No user found")
 
+        # Get account email for debugging
+        account_email = who_am_i(user.google_tokens)
+        
+        # Get events for debugging
+        from .calendar_client import get_today_events
+        debug_events = get_today_events(user.google_tokens)
+        
         # deterministic % done from finished events only
         pct_today = percent_done_completed_only(user.google_tokens)
 
@@ -211,4 +272,6 @@ async def refresh_mood_mcp():
             "mood": row.mood,
             "message": row.message,
             "milk_points": row.milk_points,
+            "debug_account_email": account_email,
+            "debug_events": debug_events,
         }

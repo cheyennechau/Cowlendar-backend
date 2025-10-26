@@ -32,18 +32,22 @@ def test_google_auth_start():
         print(f"   {auth_url}\n")
     return data
 
-def test_mcp_refresh():
-    """Test MCP-powered mood refresh"""
-    print("\n3. Testing POST /mood/refresh/mcp...")
+def test_debug_calendar():
+    """Test debug calendar endpoint"""
+    print("\n3. Testing GET /debug/calendar...")
     try:
-        response = requests.post(f"{BASE_URL}/mood/refresh/mcp")
+        response = requests.get(f"{BASE_URL}/debug/calendar")
         print(f"   Status: {response.status_code}")
         if response.status_code == 200:
             data = response.json()
-            print(f"   ✓ Percent done: {data.get('percent_done')}%")
-            print(f"   ✓ Mood: {data.get('mood')}")
-            print(f"   ✓ Message: {data.get('message')}")
-            print(f"   ✓ Milk points: {data.get('milk_points')}")
+            
+            account_email = data.get('account_email', 'Unknown')
+            events = data.get('events', [])
+            
+            print(f"\n   📧 Google Account: {account_email}")
+            print(f"   📅 Events Found: {len(events)}")
+            for i, event in enumerate(events, 1):
+                print(f"      {i}. {event.get('title')} - {event.get('start')} ({event.get('type')})")
         else:
             print(f"   ✗ Error: {response.text}")
     except Exception as e:
@@ -85,8 +89,8 @@ def main():
     
     print("\n✓ Authenticated with Google Calendar")
     
-    # Test 3: MCP Refresh
-    test_mcp_refresh()
+    # Test 3: Debug Calendar
+    test_debug_calendar()
     
     # Test 4: Notion (optional)
     test_notion_databases()
