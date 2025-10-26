@@ -1,12 +1,16 @@
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from sqlmodel import SQLModel, create_engine, Session, select
+from sqlmodel import SQLModel, Session, select
+from typing import Optional, List, Dict, Any
+from pydantic import BaseModel
+from google_auth_oauthlib.flow import Flow
+from .brain_mcp import decide_mood_with_mcp
+from datetime import date
+
 from .model import User, DaySummary
 from .scheduler import start_scheduler
 from .settings import settings, engine
-from google_auth_oauthlib.flow import Flow
-from typing import Optional, List, Dict, Any
-from pydantic import BaseModel
+from .calendar_client import who_am_i, percent_done_completed_only
 from .notion_client import (
     list_databases as notion_list_databases,
     query_database as notion_query_database,
@@ -14,6 +18,7 @@ from .notion_client import (
     append_blocks as notion_append_blocks,
 )
 
+# create app
 app = FastAPI(title="Moo Backend")
 app.add_middleware(
     CORSMiddleware,
@@ -22,10 +27,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# lifestyle
 @app.on_event("startup")
 def on_start():
     SQLModel.metadata.create_all(engine)
     start_scheduler()
+
+# routes
+@app.get("/auth/whoami")
+def auth_whoami():
+    with Session(engine) as s:
+        user = s.exec(select(User)).first()
+        if not user or not user.google_tokens:
+            return {"authed": False, "email": None}
+        email = who_am_i(user.google_tokens)
+        return {"authed": True, "email": email}
 
 @app.get("/status")
 def status():
@@ -108,7 +124,6 @@ def google_callback(request: Request, code: str, state: str):
 
     return "Google connected. You can close this tab."
 
-
 class NotionQueryBody(BaseModel):
     database_id: str
     filter: Optional[Dict[str, Any]] = None
@@ -116,16 +131,13 @@ class NotionQueryBody(BaseModel):
     page_size: int = 25
     start_cursor: Optional[str] = None
 
-
 class NotionAppendBody(BaseModel):
     block_id: str
     children: List[Dict[str, Any]]
 
-
 @app.get("/notion/databases")
 def api_notion_databases(query: Optional[str] = None, page_size: int = 10):
     return notion_list_databases(query=query, page_size=page_size)
-
 
 @app.post("/notion/query")
 def api_notion_query(body: NotionQueryBody):
@@ -137,33 +149,25 @@ def api_notion_query(body: NotionQueryBody):
         start_cursor=body.start_cursor,
     )
 
-
 @app.get("/notion/page/{page_id}")
 def api_notion_get_page(page_id: str):
     return notion_get_page(page_id)
-
 
 @app.post("/notion/append")
 def api_notion_append(body: NotionAppendBody):
     return notion_append_blocks(body.block_id, body.children)
 
-
 @app.post("/mood/refresh/mcp")
 async def refresh_mood_mcp():
-    """
-    MCP-powered mood refresh: Claude calls multiple tools (Calendar, Notion, Fetch AI)
-    and synthesizes the data to determine mood.
-    """
-    from .brain_mcp import decide_mood_with_mcp
-    from .settings import settings
-    from datetime import date
-    
     with Session(engine) as s:
         user = s.exec(select(User)).first()
         if not user:
             raise HTTPException(status_code=401, detail="No user found")
-        
-        # Get history for context
+
+        # deterministic % done from finished events only
+        pct_today = percent_done_completed_only(user.google_tokens)
+
+        # 2) Recent history (optional context for mood)
         rows = s.exec(
             select(DaySummary)
             .where(DaySummary.user_id == user.id)
@@ -171,11 +175,11 @@ async def refresh_mood_mcp():
             .limit(7)
         ).all()
         hist = [r.percent_done for r in rows[::-1]]
-        
-        # Let Claude + MCP tools analyze
+
+        # MCP decide mood/message (pass history; percent is ours)
         result = await decide_mood_with_mcp(settings.ANTHROPIC_API_KEY, hist)
-        
-        # Update today's summary
+
+        # 4) Upsert today's row
         today = date.today()
         row = s.exec(
             select(DaySummary).where(
@@ -183,29 +187,28 @@ async def refresh_mood_mcp():
                 DaySummary.day == today
             )
         ).first()
-        
+
         if not row:
             row = DaySummary(
                 user_id=user.id,
                 day=today,
-                percent_done=result["percent_done"],
+                percent_done=pct_today,
                 mood=result["mood"],
                 message=result["message"],
-                milk_points=result["percent_done"] // 10
+                milk_points=pct_today // 10,
             )
             s.add(row)
         else:
-            row.percent_done = result["percent_done"]
+            row.percent_done = pct_today
             row.mood = result["mood"]
             row.message = result["message"]
-            row.milk_points = result["percent_done"] // 10
-        
+            row.milk_points = pct_today // 10
+
         s.commit()
         s.refresh(row)
-        
         return {
             "percent_done": row.percent_done,
             "mood": row.mood,
             "message": row.message,
-            "milk_points": row.milk_points
+            "milk_points": row.milk_points,
         }
